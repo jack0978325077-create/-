@@ -3,9 +3,32 @@ import os
 import itertools
 import subprocess
 import time
+import json  # 🔥 引進大腦記憶庫模組
 from glob import glob
 from PIL import Image
 import imagehash
+
+# 記憶資料庫的檔名
+CACHE_FILE = "database_cache.json"
+
+def load_cache():
+    """從硬碟讀取之前的偵測記憶"""
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            print("ℹ️ 記憶檔案損壞，將建立新的記憶庫。")
+            return {}
+    return {}
+
+def save_cache(cache_data):
+    """將目前的偵測記憶寫入硬碟"""
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache_data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"❌ 記憶寫入硬碟失敗: {e}")
 
 def get_file_size_string(file_path):
     try:
@@ -66,7 +89,7 @@ def show_and_ask_delete(p1, p2, score):
     print(f"[ 2 ] 刪除檔案 B: {name2} 🔴 大小: {size2}")
     print(f"[ 3 ] 🔥 通通刪除 (A 和 B 都不留)")
     print(f"[ 4 ] 📂 打開這兩個檔案在電腦裡的位置")
-    print(f"[ 0 ] 🆗 暫不處理 (保留兩者)")
+    print(f"[ 0 ] 🆗 暫不處理 (保留兩者且「永遠記住此選擇」)")
     
     choice = input("👉 請輸入數字選擇操作 (1/2/3/4/0): ").strip()
     
@@ -109,78 +132,116 @@ def show_and_ask_delete(p1, p2, score):
     return 0
 
 # === 主程式開始 ===
-root_dir = "F:\\" 
+target_folder_name = "telegram"
+root_dir = "D:\\" 
 
-print(f"🔍 【ADATA HM900 啟動】開始全面掃描 F 槽的照片與影片檔案... (這可能需要一點時間)")
+print(f"🧠 【智慧大腦版】啟動！正在載入歷史偵測記憶...")
+# 載入歷史快取資料庫
+# 結構為：{ file_path: { "hash": "xxxx", "mtime": 123456, "checked_pairs": [...] } }
+db_cache = load_cache()
+
+print(f"🔍 開始全面掃描 D 槽中包含 '{target_folder_name}' 的照片與影片檔案...")
 
 extensions = ('.png', '.jpg', '.jpeg', '.mp4', '.avi', '.mov', '.mkv')
 all_files = []
-
-# 設定 F 槽也要精準排除的子路徑
 exclude_sub_path = os.path.join("新增資料夾", "images").lower()
 
 for root, dirs, files in os.walk(root_dir):
     if any(x in root.lower() for x in ['$recycle.bin', 'system volume information', '.git', 'windows']):
         continue
-    
-    # 🔥 排除 F 槽底下的「新增資料夾\images」
     if exclude_sub_path in root.lower():
         continue
-        
-    for file in files:
-        if file.lower().endswith(extensions):
-            all_files.append(os.path.join(root, file))
+    if target_folder_name in root.lower():
+        for file in files:
+            if file.lower().endswith(extensions):
+                all_files.append(os.path.join(root, file))
 
 print(f"📂 掃描完畢！共找到 {len(all_files)} 個媒體檔案。")
+print("🤖 開始進行大數據高速智慧記憶比對...\n" + "="*50)
 
-if len(all_files) < 2:
-    print("ℹ️ 找不到足夠的檔案進行比對，或檔案都在排除名單內。")
-else:
-    print("🤖 開始進行大數據高速指紋比對...\n" + "="*50)
+# 1. 第一階段：快速更新或計算所有檔案的指紋（如果記憶庫裡有且沒被改過，直接秒跳過不重複計算）
+hash_dict = {}
+file_count = 0
 
-    hash_dict = {}
-
-    for file_path in all_files:
-        if not os.path.exists(file_path):
-            continue
-            
+for file_path in all_files:
+    if not os.path.exists(file_path):
+        continue
+        
+    mtime = os.path.getmtime(file_path) # 獲取檔案最後修改時間
+    
+    # 檢查記憶庫是否有這個檔案，且檔案沒有被修改過
+    if file_path in db_cache and db_cache[file_path].get("mtime") == mtime:
+        # 直接從記憶大腦讀取舊指紋，不用耗費 CPU 重新開圖計算！
+        file_hash = imagehash.hex_to_hash(db_cache[file_path]["hash"])
+    else:
+        # 記憶庫沒有，或是檔案被動過，才重新計算指紋
         pil_img = get_image_for_hash(file_path)
         if pil_img is None:
             continue
-            
         try:
-            current_hash = imagehash.phash(pil_img)
+            file_hash = imagehash.phash(pil_img)
+            # 存入記憶大腦
+            db_cache[file_path] = {
+                "hash": str(file_hash),
+                "mtime": mtime,
+                "ignored_with": db_cache.get(file_path, {}).get("ignored_with", [])
+            }
         except:
             continue
-
-        is_duplicate = False
-        for saved_hash, saved_path in list(hash_dict.items()):
-            if not os.path.exists(saved_path):
-                del hash_dict[saved_hash]
-                continue
-                
-            distance = current_hash - saved_hash
-            score = (1 - (distance / 64.0)) * 100
             
-            if score >= 90.0:
-                print(f"\n🎯 匹配成功！")
-                result = show_and_ask_delete(saved_path, file_path, score)
-                
-                if result == 1:
-                    del hash_dict[saved_hash]
-                    hash_dict[current_hash] = file_path
-                    is_duplicate = True
-                    break
-                elif result == 2:
-                    is_duplicate = True
-                    break
-                elif result == 3:
-                    del hash_dict[saved_hash]
-                    is_duplicate = True
-                    break
-                print("="*50)
+    hash_dict[file_path] = file_hash
 
-        if not is_duplicate:
-            hash_dict[current_hash] = file_path
+# 2. 第二階段：兩兩配對比對（加入歷史記憶過濾機制）
+deleted_files = set()
 
-print("\n🎉 ADATA HM900 檔案檢查完畢！")
+# 使用兩兩交叉組合
+for p1, p2 in itertools.combinations(list(hash_dict.keys()), 2):
+    if p1 in deleted_files or p2 in deleted_files:
+        continue
+    if not os.path.exists(p1) or not os.path.exists(p2):
+        continue
+        
+    # 🔥 關鍵判斷：檢查使用者以前是不是對這一對檔案選過 [0] 暫不處理
+    # 如果以前選過保留，大腦會記得，這次開新視窗就會「直接自動判定通過」！
+    if p2 in db_cache.get(p1, {}).get("ignored_with", []) or p1 in db_cache.get(p2, {}).get("ignored_with", []):
+        continue
+        
+    # 計算指紋差異
+    distance = hash_dict[p1] - hash_dict[p2]
+    score = (1 - (distance / 64.0)) * 100
+    
+    if score >= 90.0:
+        print(f"\n🎯 匹配成功！偵測到未處理過的高相似檔案。")
+        result = show_and_ask_delete(p1, p2, score)
+        
+        if result == 1:
+            deleted_files.add(p1)
+            if p1 in db_cache: del db_cache[p1]
+            save_cache(db_cache) # 立刻存檔記憶
+        elif result == 2:
+            deleted_files.add(p2)
+            if p2 in db_cache: del db_cache[p2]
+            save_cache(db_cache) # 立刻存檔記憶
+        elif result == 3:
+            deleted_files.add(p1)
+            deleted_files.add(p2)
+            if p1 in db_cache: del db_cache[p1]
+            if p2 in db_cache: del db_cache[p2]
+            save_cache(db_cache) # 立刻存檔記憶
+        elif result == 0:
+            # 使用者選擇暫不處理（保留兩者）：將此配對寫入彼此的「放行黑名單」大腦中
+            if "ignored_with" not in db_cache[p1]: db_cache[p1]["ignored_with"] = []
+            if "ignored_with" not in db_cache[p2]: db_cache[p2]["ignored_with"] = []
+            
+            db_cache[p1]["ignored_with"].append(p2)
+            db_cache[p2]["ignored_with"].append(p1)
+            save_cache(db_cache) # 立刻存檔記憶，下次開新視窗自動跳過這一對！
+        print("="*50)
+
+# 清理已經在硬碟中被刪除的無效記憶，保持資料庫乾淨
+for cached_path in list(db_cache.keys()):
+    if not os.path.exists(cached_path):
+        del db_cache[cached_path]
+save_cache(db_cache)
+
+print("\n🎉 Telegram 智慧大腦大檢查完成！所有進度已安全儲存至硬碟。")

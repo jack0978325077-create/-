@@ -3,9 +3,29 @@ import os
 import itertools
 import subprocess
 import time
+import json  # 大腦記憶庫模組
 from glob import glob
 from PIL import Image
 import imagehash
+
+# 記憶資料庫的檔名
+CACHE_FILE = "database_cache.json"
+
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_cache(cache_data):
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache_data, f, ensure_ascii=False, indent=4)
+    except:
+        pass
 
 def get_file_size_string(file_path):
     try:
@@ -66,7 +86,7 @@ def show_and_ask_delete(p1, p2, score):
     print(f"[ 2 ] 刪除檔案 B: {name2} 🔴 大小: {size2}")
     print(f"[ 3 ] 🔥 通通刪除 (A 和 B 都不留)")
     print(f"[ 4 ] 📂 打開這兩個檔案在電腦裡的位置")
-    print(f"[ 0 ] 🆗 暫不處理 (保留兩者)")
+    print(f"[ 0 ] 🆗 暫不處理 (保留兩者且「永遠記住此選擇」)")
     
     choice = input("👉 請輸入數字選擇操作 (1/2/3/4/0): ").strip()
     
@@ -112,12 +132,15 @@ def show_and_ask_delete(p1, p2, score):
 target_folder_name = "telegram"
 root_dir = "D:\\" 
 
+print(f"🧠 【智慧大腦版】啟動！正在載入歷史偵測記憶...")
+db_cache = load_cache()
+
 print(f"🔍 開始全面掃描 D 槽中包含 '{target_folder_name}' 的照片與影片檔案...")
 
 extensions = ('.png', '.jpg', '.jpeg', '.mp4', '.avi', '.mov', '.mkv')
 all_files = []
 
-# 設定要精準排除的子路徑（轉為小寫以便比對）
+# 設定要精準排除的子路徑（轉小寫比對）
 exclude_sub_path = os.path.join("新增資料夾", "images").lower()
 
 for root, dirs, files in os.walk(root_dir):
@@ -125,62 +148,92 @@ for root, dirs, files in os.walk(root_dir):
     if any(x in root.lower() for x in ['$recycle.bin', 'system volume information', '.git', 'windows']):
         continue
     
-    # 2. 🔥 精準排除：如果目前路徑包含「新增資料夾\images」，直接跳過不偵測
+    # 2. 🔥 精準排除：如果路徑裡包含「新增資料夾\images」，絕對不偵測，直接跳過
     if exclude_sub_path in root.lower():
         continue
     
-    # 3. 鎖定包含 "telegram" 的路徑進行媒體搜尋
+    # 3. 區域限定：只有路徑內包含 "telegram" 的資料夾才進去搜集檔案
     if target_folder_name in root.lower():
         for file in files:
             if file.lower().endswith(extensions):
                 all_files.append(os.path.join(root, file))
 
-print(f"📂 掃描完畢！共找到 {len(all_files)} 個媒體檔案。")
-print("🤖 開始進行大數據高速指紋比對...\n" + "="*50)
+print(f"📂 掃描完畢！共找到 {len(all_files)} 個 Telegram 相關媒體檔案。")
+print("🤖 開始進行大數據高速智慧記憶比對...\n" + "="*50)
 
+# 第一階段：快速獲取/計算指紋
 hash_dict = {}
-
 for file_path in all_files:
     if not os.path.exists(file_path):
         continue
         
-    pil_img = get_image_for_hash(file_path)
-    if pil_img is None:
-        continue
-        
-    try:
-        current_hash = imagehash.phash(pil_img)
-    except:
-        continue
-
-    is_duplicate = False
-    for saved_hash, saved_path in list(hash_dict.items()):
-        if not os.path.exists(saved_path):
-            del hash_dict[saved_hash]
+    mtime = os.path.getmtime(file_path)
+    
+    if file_path in db_cache and db_cache[file_path].get("mtime") == mtime:
+        file_hash = imagehash.hex_to_hash(db_cache[file_path]["hash"])
+    else:
+        pil_img = get_image_for_hash(file_path)
+        if pil_img is None:
+            continue
+        try:
+            file_hash = imagehash.phash(pil_img)
+            db_cache[file_path] = {
+                "hash": str(file_hash),
+                "mtime": mtime,
+                "ignored_with": db_cache.get(file_path, {}).get("ignored_with", [])
+            }
+        except:
             continue
             
-        distance = current_hash - saved_hash
-        score = (1 - (distance / 64.0)) * 100
+    hash_dict[file_path] = file_hash
+
+# 第二階段：智慧兩兩配對比對
+deleted_files = set()
+
+for p1, p2 in itertools.combinations(list(hash_dict.keys()), 2):
+    if p1 in deleted_files or p2 in deleted_files:
+        continue
+    if not os.path.exists(p1) or not os.path.exists(p2):
+        continue
         
-        if score >= 90.0:
-            print(f"\n🎯 匹配成功！")
-            result = show_and_ask_delete(saved_path, file_path, score)
+    # 🔥 記憶判定：如果之前開黑視窗時這一對檔案選過 0，這次直接自動跳過！
+    if p2 in db_cache.get(p1, {}).get("ignored_with", []) or p1 in db_cache.get(p2, {}).get("ignored_with", []):
+        continue
+        
+    distance = hash_dict[p1] - hash_dict[p2]
+    score = (1 - (distance / 64.0)) * 100
+    
+    if score >= 90.0:
+        print(f"\n🎯 匹配成功！偵測到未處理過的高相似檔案。")
+        result = show_and_ask_delete(p1, p2, score)
+        
+        if result == 1:
+            deleted_files.add(p1)
+            if p1 in db_cache: del db_cache[p1]
+            save_cache(db_cache)
+        elif result == 2:
+            deleted_files.add(p2)
+            if p2 in db_cache: del db_cache[p2]
+            save_cache(db_cache)
+        elif result == 3:
+            deleted_files.add(p1)
+            deleted_files.add(p2)
+            if p1 in db_cache: del db_cache[p1]
+            if p2 in db_cache: del db_cache[p2]
+            save_cache(db_cache)
+        elif result == 0:
+            if "ignored_with" not in db_cache[p1]: db_cache[p1]["ignored_with"] = []
+            if "ignored_with" not in db_cache[p2]: db_cache[p2]["ignored_with"] = []
             
-            if result == 1:
-                del hash_dict[saved_hash]
-                hash_dict[current_hash] = file_path
-                is_duplicate = True
-                break
-            elif result == 2:
-                is_duplicate = True
-                break
-            elif result == 3:
-                del hash_dict[saved_hash]
-                is_duplicate = True
-                break
-            print("="*50)
+            db_cache[p1]["ignored_with"].append(p2)
+            db_cache[p2]["ignored_with"].append(p1)
+            save_cache(db_cache)  # 立刻寫入記憶
+        print("="*50)
 
-    if not is_duplicate:
-        hash_dict[current_hash] = file_path
+# 清理過期記憶
+for cached_path in list(db_cache.keys()):
+    if not os.path.exists(cached_path):
+        del db_cache[cached_path]
+save_cache(db_cache)
 
-print("\n🎉 Telegram 相關檔案大檢查與清理完成！")
+print("\n🎉 Telegram 智慧記憶大檢查完成！")
