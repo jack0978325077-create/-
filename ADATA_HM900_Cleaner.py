@@ -109,24 +109,78 @@ def show_and_ask_delete(p1, p2, score):
     return 0
 
 # === 主程式開始 ===
-# 🔥 關鍵修改 1：將偵測根目錄直接鎖定在你的外接硬碟 F 槽！
 root_dir = "F:\\" 
 
-print(f"🔍 【ADATA HM900 啟動】開始全面掃描 F 槽的所有照片與影片檔案...")
+print(f"🔍 【ADATA HM900 啟動】開始全面掃描 F 槽的照片與影片檔案... (這可能需要一點時間)")
 
 extensions = ('.png', '.jpg', '.jpeg', '.mp4', '.avi', '.mov', '.mkv')
 all_files = []
 
+# 設定 F 槽也要精準排除的子路徑
+exclude_sub_path = os.path.join("新增資料夾", "images").lower()
+
 for root, dirs, files in os.walk(root_dir):
-    # 基礎系統防護過濾（外接硬碟通常會有 $RECYCLE.BIN，一定要跳過）
     if any(x in root.lower() for x in ['$recycle.bin', 'system volume information', '.git', 'windows']):
         continue
     
-    # 🔥 關鍵修改 2：因為這是外接硬碟，我們不需要像 Telegram 那樣限制特定資料夾名稱
-    # 程式會直接掃描 F 槽「所有」不是系統檔的資料夾！
+    # 🔥 排除 F 槽底下的「新增資料夾\images」
+    if exclude_sub_path in root.lower():
+        continue
+        
     for file in files:
         if file.lower().endswith(extensions):
             all_files.append(os.path.join(root, file))
 
-print(f"📂 掃描完畢！在 ADATA (F:) 硬碟中總共找到 {len(all_files)} 個媒體檔案。")
-print("🤖 開始進行大數據高速指紋比對...\n" + "="*50)
+print(f"📂 掃描完畢！共找到 {len(all_files)} 個媒體檔案。")
+
+if len(all_files) < 2:
+    print("ℹ️ 找不到足夠的檔案進行比對，或檔案都在排除名單內。")
+else:
+    print("🤖 開始進行大數據高速指紋比對...\n" + "="*50)
+
+    hash_dict = {}
+
+    for file_path in all_files:
+        if not os.path.exists(file_path):
+            continue
+            
+        pil_img = get_image_for_hash(file_path)
+        if pil_img is None:
+            continue
+            
+        try:
+            current_hash = imagehash.phash(pil_img)
+        except:
+            continue
+
+        is_duplicate = False
+        for saved_hash, saved_path in list(hash_dict.items()):
+            if not os.path.exists(saved_path):
+                del hash_dict[saved_hash]
+                continue
+                
+            distance = current_hash - saved_hash
+            score = (1 - (distance / 64.0)) * 100
+            
+            if score >= 90.0:
+                print(f"\n🎯 匹配成功！")
+                result = show_and_ask_delete(saved_path, file_path, score)
+                
+                if result == 1:
+                    del hash_dict[saved_hash]
+                    hash_dict[current_hash] = file_path
+                    is_duplicate = True
+                    break
+                elif result == 2:
+                    is_duplicate = True
+                    break
+                elif result == 3:
+                    del hash_dict[saved_hash]
+                    is_duplicate = True
+                    break
+                print("="*50)
+
+        if not is_duplicate:
+            hash_dict[current_hash] = file_path
+
+print("\n🎉 ADATA HM900 檔案檢查完畢！")
